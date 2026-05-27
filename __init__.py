@@ -1,28 +1,30 @@
 """
-PromptForge - ComfyUI Custom Node Pack for AI Image Generation Prompts
+PromptForge - ⚒️ AI绘画提示词锻造工具
 
-Combines features from:
-- pandai-plus: LLM chat, character consistency, story splitting, image analysis
-- ComfyUI-Prompt-Assistant: Rule system, tag presets, translation
+ComfyUI 智能提示词节点包，集成 LLM 对话、人物一致性、剧情分镜、
+规则系统、标签预设、翻译等功能。
 
-Nodes are split across:
-  nodes_prompt.py  — Prompt building, tag presets, rules, translation
-  nodes_llm.py     — LLM chat, character consistency, story splitting, vision
+融合 pandai-plus 和 ComfyUI-Prompt-Assistant 的精华。
 """
 
 from .nodes_prompt import NODE_CLASS_MAPPINGS as PROMPT_NODES
 from .nodes_llm import NODE_CLASS_MAPPINGS as LLM_NODES
+from .nodes_additional import NODE_CLASS_MAPPINGS as ADDITIONAL_NODES
+
 from .nodes_prompt import NODE_DISPLAY_NAME_MAPPINGS as PROMPT_DISPLAY
 from .nodes_llm import NODE_DISPLAY_NAME_MAPPINGS as LLM_DISPLAY
+from .nodes_additional import NODE_DISPLAY_NAME_MAPPINGS as ADDITIONAL_DISPLAY
 
 NODE_CLASS_MAPPINGS = {}
 NODE_CLASS_MAPPINGS.update(PROMPT_NODES)
 NODE_CLASS_MAPPINGS.update(LLM_NODES)
+NODE_CLASS_MAPPINGS.update(ADDITIONAL_NODES)
 
 NODE_DISPLAY_NAME_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS.update(PROMPT_DISPLAY)
 NODE_DISPLAY_NAME_MAPPINGS.update(LLM_DISPLAY)
+NODE_DISPLAY_NAME_MAPPINGS.update(ADDITIONAL_DISPLAY)
 
-WEB_DIRECTORY = None  # No frontend JS needed for core nodes
+WEB_DIRECTORY = None
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

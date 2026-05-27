@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import requests
 from pathlib import Path
 
 logger = logging.getLogger("PromptForge")
@@ -970,9 +971,336 @@ class PromptEnhancerNode:
         return (response.strip(), negative_hint.strip() if negative_hint else "")
 
 
-# ---------------------------------------------------------------------------
-# Registration
-# ---------------------------------------------------------------------------
+class APIConfigNode:
+    """API配置节点 - 存储API URL和API Key，输出默认模型名"""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "api_url": ("STRING", {
+                    "multiline": False,
+                    "default": "https://api.deepseek.com",
+                    "placeholder": "https://api.deepseek.com"
+                }),
+                "api_key": ("STRING", {
+                    "multiline": False,
+                    "default": "",
+                    "placeholder": "sk-..."
+                }),
+            },
+            "optional": {
+                "default_model": ("STRING", {
+                    "multiline": False,
+                    "default": "deepseek-chat",
+                    "placeholder": "deepseek-chat"
+                }),
+            }
+        }
+
+    RETURN_TYPES = ("API_CONFIG", "STRING")
+    RETURN_NAMES = ("api_config", "default_model")
+    FUNCTION = "configure"
+    CATEGORY = "PromptForge/Config"
+
+    def configure(self, api_url, api_key, default_model="deepseek-chat"):
+        api_url = api_url.rstrip("/")
+        config = {
+            "api_url": api_url,
+            "api_key": api_key,
+            "default_model": default_model
+        }
+        return (config, default_model)
+
+
+class APITestNode:
+    """测试API连通性和获取可用模型列表"""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "api_config": ("API_CONFIG",),
+                "test_mode": (["connectivity", "list_models", "both"], {
+                    "default": "both"
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("test_result", "models_list")
+    FUNCTION = "test_api"
+    CATEGORY = "PromptForge/Config"
+
+    def test_api(self, api_config, test_mode="both"):
+        api_url = api_config["api_url"]
+        api_key = api_config["api_key"]
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+
+        result_lines = []
+        models_list = ""
+
+        if test_mode in ["connectivity", "both"]:
+            try:
+                test_url = f"{api_url}/v1/models"
+                resp = requests.get(test_url, headers=headers, timeout=10)
+                if resp.status_code == 200:
+                    result_lines.append("[OK] API连接成功!")
+                    result_lines.append(f"状态码: {resp.status_code}")
+                else:
+                    result_lines.append(f"[FAIL] API返回状态码: {resp.status_code}")
+                    try:
+                        err = resp.json()
+                        result_lines.append(f"错误信息: {json.dumps(err, ensure_ascii=False)}")
+                    except:
+                        result_lines.append(f"响应内容: {resp.text[:500]}")
+            except requests.exceptions.ConnectionError:
+                result_lines.append(f"[FAIL] 连接失败: 无法连接到 {api_url}")
+            except requests.exceptions.Timeout:
+                result_lines.append(f"[FAIL] 连接超时: {api_url} 响应超时")
+            except Exception as e:
+                result_lines.append(f"[FAIL] 测试失败: {str(e)}")
+
+        if test_mode in ["list_models", "both"]:
+            try:
+                models_url = f"{api_url}/v1/models"
+                resp = requests.get(models_url, headers=headers, timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if "data" in data:
+                        model_ids = [m.get("id", "unknown") for m in data["data"]]
+                        models_list = "\n".join(model_ids)
+                        result_lines.append(f"\n[OK] 获取到 {len(model_ids)} 个模型:")
+                        for mid in model_ids:
+                            result_lines.append(f"  - {mid}")
+                    else:
+                        result_lines.append("[WARN] 响应中没有data字段")
+                else:
+                    result_lines.append(f"[FAIL] 获取模型列表失败: {resp.status_code}")
+            except Exception as e:
+                result_lines.append(f"[FAIL] 获取模型列表失败: {str(e)}")
+
+        if not models_list:
+            models_list = "(无法获取模型列表)"
+
+        return ("\n".join(result_lines), models_list)
+
+
+class CharacterAnchorNode:
+    """
+    人物外貌锚点节点
+    定义角色外貌描述，用于保持多张图片生成时人物外观的一致性
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "character_name": ("STRING", {
+                    "multiline": False,
+                    "default": "主角",
+                    "placeholder": "角色名称，如：小红、Alice"
+                }),
+                "gender": (["female", "male", "other"],),
+                "age_range": (["child", "teen", "young_adult", "adult", "middle_aged", "elderly"], {
+                    "default": "young_adult"
+                }),
+                "appearance_description": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "placeholder": "详细外貌描述，如：黑色长发，大眼睛，瓜子脸，皮肤白皙，身材纤细"
+                }),
+            },
+            "optional": {
+                "clothing_style": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "placeholder": "服装风格描述（可选）"
+                }),
+                "distinctive_features": ("STRING", {
+                    "multiline": False,
+                    "default": "",
+                    "placeholder": "标志性特征，如：左脸有酒窝、戴红色发卡"
+                }),
+                "existing_characters": ("CHARACTER_LIST",),
+            }
+        }
+
+    RETURN_TYPES = ("CHARACTER_LIST", "STRING")
+    RETURN_NAMES = ("character_list", "character_prompt")
+    FUNCTION = "add_character"
+    CATEGORY = "PromptForge/Character"
+
+    AGE_MAP = {
+        "child": "child (6-12 years old)",
+        "teen": "teenager (13-17 years old)",
+        "young_adult": "young adult (18-25 years old)",
+        "adult": "adult (26-40 years old)",
+        "middle_aged": "middle-aged (41-60 years old)",
+        "elderly": "elderly (60+ years old)"
+    }
+
+    GENDER_MAP = {
+        "female": "female",
+        "male": "male",
+        "other": "androgynous"
+    }
+
+    def add_character(self, character_name, gender, age_range, appearance_description,
+                      clothing_style="", distinctive_features="", existing_characters=None):
+
+        character = {
+            "name": character_name,
+            "gender": self.GENDER_MAP.get(gender, gender),
+            "age": self.AGE_MAP.get(age_range, age_range),
+            "appearance": appearance_description,
+            "clothing": clothing_style,
+            "features": distinctive_features
+        }
+
+        characters = []
+        if existing_characters is not None:
+            characters = existing_characters.copy()
+        characters.append(character)
+
+        character_prompt = self._build_character_prompt(characters)
+        return (characters, character_prompt)
+
+    def _build_character_prompt(self, characters: list) -> str:
+        if not characters:
+            return ""
+
+        parts = []
+        for char in characters:
+            char_parts = []
+            if char["name"]:
+                char_parts.append(f"Character '{char['name']}'")
+            char_parts.append(f"{char['age']} {char['gender']}")
+            if char["appearance"]:
+                char_parts.append(char["appearance"])
+            if char["clothing"]:
+                char_parts.append(f"wearing {char['clothing']}")
+            if char["features"]:
+                char_parts.append(char["features"])
+            parts.append(", ".join(char_parts))
+
+        return "Characters: " + "; ".join(parts)
+
+
+class CharacterMergeNode:
+    """合并多个角色列表，用于多人物场景"""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "character_list_1": ("CHARACTER_LIST",),
+                "character_list_2": ("CHARACTER_LIST",),
+            },
+            "optional": {
+                "character_list_3": ("CHARACTER_LIST",),
+                "character_list_4": ("CHARACTER_LIST",),
+            }
+        }
+
+    RETURN_TYPES = ("CHARACTER_LIST", "STRING")
+    RETURN_NAMES = ("merged_characters", "merged_prompt")
+    FUNCTION = "merge_characters"
+    CATEGORY = "PromptForge/Character"
+
+    def merge_characters(self, character_list_1, character_list_2,
+                         character_list_3=None, character_list_4=None):
+        merged = character_list_1.copy() + character_list_2.copy()
+        if character_list_3:
+            merged += character_list_3.copy()
+        if character_list_4:
+            merged += character_list_4.copy()
+
+        prompt_parts = []
+        for char in merged:
+            char_desc = f"{char['name']}: {char['age']} {char['gender']}"
+            if char['appearance']:
+                char_desc += f", {char['appearance']}"
+            if char['clothing']:
+                char_desc += f", wearing {char['clothing']}"
+            if char['features']:
+                char_desc += f", {char['features']}"
+            prompt_parts.append(char_desc)
+
+        prompt = "Characters in scene: " + "; ".join(prompt_parts)
+        return (merged, prompt)
+
+
+class HistoryClearNode:
+    """清空对话历史，开始新对话"""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "trigger": ("STRING", {"default": "clear", "multiline": False}),
+            },
+        }
+
+    RETURN_TYPES = ("CHAT_HISTORY",)
+    RETURN_NAMES = ("empty_history",)
+    FUNCTION = "clear_history"
+    CATEGORY = "PromptForge/LLM"
+
+    def clear_history(self, trigger):
+        return ({"messages": []},)
+
+
+class HistoryViewNode:
+    """查看对话历史内容"""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "chat_history": ("CHAT_HISTORY",),
+            },
+            "optional": {
+                "max_display": ("INT", {
+                    "default": 20,
+                    "min": 1,
+                    "max": 100,
+                    "step": 1
+                }),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "INT")
+    RETURN_NAMES = ("history_text", "total_messages")
+    FUNCTION = "view_history"
+    CATEGORY = "PromptForge/LLM"
+
+    def view_history(self, chat_history, max_display=20):
+        messages = chat_history.get("messages", [])
+        total = len(messages)
+
+        lines = [f"=== 对话历史 ({total} 条消息) ===\n"]
+
+        display_msgs = messages[-max_display:] if len(messages) > max_display else messages
+        if len(messages) > max_display:
+            lines.append(f"... (隐藏了 {len(messages) - max_display} 条早期消息) ...\n")
+
+        for msg in display_msgs:
+            role = msg["role"]
+            content = msg["content"]
+            if len(content) > 500:
+                content = content[:500] + "..."
+            
+            role_cn = {"system": "系统", "user": "用户", "assistant": "助手"}.get(role, role)
+            lines.append(f"[{role_cn}]")
+            lines.append(content)
+            lines.append("")
+
+        return ("\n".join(lines), total)
+
 
 NODE_CLASS_MAPPINGS = {
     "LLMChatNode": LLMChatNode,
@@ -983,6 +1311,12 @@ NODE_CLASS_MAPPINGS = {
     "SceneBatchOutputNode": SceneBatchOutputNode,
     "ImageAnalyzerNode": ImageAnalyzerNode,
     "PromptEnhancerNode": PromptEnhancerNode,
+    "APIConfigNode": APIConfigNode,
+    "APITestNode": APITestNode,
+    "CharacterAnchorNode": CharacterAnchorNode,
+    "CharacterMergeNode": CharacterMergeNode,
+    "HistoryClearNode": HistoryClearNode,
+    "HistoryViewNode": HistoryViewNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -994,4 +1328,10 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SceneBatchOutputNode": "Scene Batch Output",
     "ImageAnalyzerNode": "Image Analyzer",
     "PromptEnhancerNode": "Prompt Enhancer",
+    "APIConfigNode": "API Config",
+    "APITestNode": "API Test",
+    "CharacterAnchorNode": "Character Anchor",
+    "CharacterMergeNode": "Character Merge",
+    "HistoryClearNode": "History Clear",
+    "HistoryViewNode": "History View",
 }

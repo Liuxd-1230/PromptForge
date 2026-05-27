@@ -401,10 +401,277 @@ class PromptSplitter:
             sections.append("")
         return tuple(sections[:4])
 
+        return tuple(sections[:4])
 
-# ---------------------------------------------------------------------------
-# Registration
-# ---------------------------------------------------------------------------
+
+class Img2ImgPromptNode:
+    """
+    图生图Prompt生成节点
+    基于参考图片分析和角色锚点，生成适合图生图的prompt
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "api_config": ("API_CONFIG",),
+                "model": ("STRING", {
+                    "multiline": False,
+                    "default": "deepseek-chat",
+                }),
+                "reference_analysis": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "placeholder": "参考图片的分析结果（从图片分析节点获取）"
+                }),
+                "user_request": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "placeholder": "你想要的效果，如：保持风格不变，但把人物换成小红"
+                }),
+            },
+            "optional": {
+                "character_list": ("CHARACTER_LIST",),
+                "preserve_elements": (["style", "composition", "lighting", "all", "none"], {
+                    "default": "style",
+                    "tooltip": "从参考图保留哪些元素"
+                }),
+                "strength": ("FLOAT", {
+                    "default": 0.7,
+                    "min": 0,
+                    "max": 1,
+                    "step": 0.05,
+                    "tooltip": "变换强度建议（0.3=微调，0.5=中等，0.7=较大变化）"
+                }),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "FLOAT")
+    RETURN_NAMES = ("img2img_prompt", "negative_prompt", "suggested_strength")
+    FUNCTION = "generate_prompt"
+    CATEGORY = "PromptForge/Image"
+
+    def generate_prompt(self, api_config, model, reference_analysis, user_request,
+                        character_list=None, preserve_elements="style", strength=0.7):
+
+        from openai import OpenAI
+
+        api_url = api_config["api_url"]
+        api_key = api_config["api_key"]
+
+        if not model or model.strip() == "":
+            model = api_config.get("default_model", "deepseek-chat")
+
+        base_url = api_url if api_url.endswith("/v1") else f"{api_url}/v1"
+        client = OpenAI(api_key=api_key, base_url=base_url)
+
+        # 构建角色信息
+        character_info = ""
+        if character_list:
+            char_parts = []
+            for char in character_list:
+                desc = f"- {char['name']}: {char['age']} {char['gender']}"
+                if char['appearance']:
+                    desc += f", {char['appearance']}"
+                if char['clothing']:
+                    desc += f", wearing {char['clothing']}"
+                if char['features']:
+                    desc += f", {char['features']}"
+                char_parts.append(desc)
+            character_info = "Characters to include:\n" + "\n".join(char_parts)
+
+        # 保留元素说明
+        preserve_desc = {
+            "style": "art style, color palette, overall aesthetic",
+            "composition": "composition, framing, camera angle",
+            "lighting": "lighting, shadows, atmosphere",
+            "all": "style, composition, lighting, and overall mood",
+            "none": "only the core concept, everything else can change"
+        }
+
+        system_prompt = """You are an expert Stable Diffusion prompt engineer specializing in img2img.
+
+Your task is to generate a prompt for img2img generation based on:
+1. A reference image analysis
+2. User's request for changes
+3. Character descriptions (if provided)
+
+Output TWO things separated by [NEGATIVE]:
+1. The positive prompt (what you want)
+2. The negative prompt (what to avoid)
+
+Example format:
+beautiful woman in red dress standing in garden, masterpiece, best quality, highly detailed
+[NEGATIVE]
+blurry, low quality, deformed, ugly, bad anatomy, extra limbs"""
+
+        user_prompt = f"""Reference image analysis:
+{reference_analysis}
+
+User request: {user_request}
+
+{character_info if character_info else ""}
+
+Preserve from reference: {preserve_desc.get(preserve_elements, "style")}
+
+Generate img2img prompt that combines the reference image's {preserve_elements} with the user's request.
+If character descriptions are provided, incorporate them into the prompt for character consistency.
+
+Output format:
+[positive prompt]
+[NEGATIVE]
+[negative prompt]"""
+
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                max_tokens=2048,
+                temperature=0.7,
+                stream=False
+            )
+
+            result = response.choices[0].message.content
+
+            # 解析输出
+            if "[NEGATIVE]" in result:
+                parts = result.split("[NEGATIVE]")
+                img2img_prompt = parts[0].strip()
+                negative_prompt = parts[1].strip()
+            else:
+                img2img_prompt = result.strip()
+                negative_prompt = "blurry, low quality, deformed, ugly, bad anatomy, extra limbs, watermark, text"
+
+        except Exception as e:
+            img2img_prompt = f"[Error] {str(e)}"
+            negative_prompt = ""
+
+        return (img2img_prompt, negative_prompt, strength)
+
+
+class StyleTransferPromptNode:
+    """
+    风格迁移Prompt生成
+    将一张图的风格应用到另一张图的内容上
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "api_config": ("API_CONFIG",),
+                "model": ("STRING", {"multiline": False, "default": "deepseek-chat"}),
+                "content_description": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "placeholder": "内容图的描述（或从图片分析节点获取）"
+                }),
+                "style_description": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "placeholder": "风格图的描述（或从图片分析节点获取）"
+                }),
+            },
+            "optional": {
+                "character_list": ("CHARACTER_LIST",),
+                "style_weight": ("FLOAT", {
+                    "default": 0.6,
+                    "min": 0,
+                    "max": 1,
+                    "step": 0.05,
+                    "tooltip": "风格权重（0=只用内容，1=只用风格）"
+                }),
+                "system_prompt": ("STRING", {
+                    "multiline": True,
+                    "default": "",
+                    "placeholder": "自定义系统提示词（留空使用内置默认）。用于控制LLM如何融合风格和内容，例如：指定画风标签、质量要求、输出格式等"
+                }),
+            }
+        }
+
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("transfer_prompt", "negative_prompt")
+    FUNCTION = "generate_transfer_prompt"
+    CATEGORY = "PromptForge/Image"
+
+    def generate_transfer_prompt(self, api_config, model, content_description, style_description,
+                                  character_list=None, style_weight=0.6, system_prompt=""):
+
+        from openai import OpenAI
+
+        api_url = api_config["api_url"]
+        api_key = api_config["api_key"]
+
+        if not model or model.strip() == "":
+            model = api_config.get("default_model", "deepseek-chat")
+
+        base_url = api_url if api_url.endswith("/v1") else f"{api_url}/v1"
+        client = OpenAI(api_key=api_key, base_url=base_url)
+
+        character_info = ""
+        if character_list:
+            char_parts = []
+            for char in character_list:
+                desc = f"{char['name']}: {char['appearance']}"
+                char_parts.append(desc)
+            character_info = "Characters: " + "; ".join(char_parts)
+
+        if not system_prompt or system_prompt.strip() == "":
+            system_prompt = """You are an expert at combining artistic styles with image content.
+Generate a Stable Diffusion prompt that applies the style from one image to the content of another.
+
+Output format:
+[positive prompt]
+[NEGATIVE]
+[negative prompt]"""
+
+        user_prompt = f"""Content to render: {content_description}
+
+Style to apply: {style_description}
+
+Style weight: {style_weight} (0=content only, 1=style only)
+
+{character_info if character_info else ""}
+
+Generate a prompt that renders the content in the given style.
+Output format:
+[positive prompt]
+[NEGATIVE]
+[negative prompt]"""
+
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                max_tokens=1500,
+                temperature=0.7,
+                stream=False
+            )
+
+            result = response.choices[0].message.content
+
+            if "[NEGATIVE]" in result:
+                parts = result.split("[NEGATIVE]")
+                transfer_prompt = parts[0].strip()
+                negative_prompt = parts[1].strip()
+            else:
+                transfer_prompt = result.strip()
+                negative_prompt = "blurry, low quality, deformed, ugly, bad anatomy"
+
+        except Exception as e:
+            transfer_prompt = f"[Error] {str(e)}"
+            negative_prompt = ""
+
+        return (transfer_prompt, negative_prompt)
+
+
+# ---------------------------------------------------------------------------\n# Registration\n# ---------------------------------------------------------------------------\n
 
 NODE_CLASS_MAPPINGS = {
     "PromptBuilder": PromptBuilder,
@@ -412,6 +679,8 @@ NODE_CLASS_MAPPINGS = {
     "PromptRuleEngine": PromptRuleEngine,
     "PromptTranslator": PromptTranslator,
     "PromptSplitter": PromptSplitter,
+    "Img2ImgPromptNode": Img2ImgPromptNode,
+    "StyleTransferPromptNode": StyleTransferPromptNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -420,4 +689,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PromptRuleEngine": "Prompt Rule Engine",
     "PromptTranslator": "Prompt Translator",
     "PromptSplitter": "Prompt Splitter",
+    "Img2ImgPromptNode": "Img2Img Prompt",
+    "StyleTransferPromptNode": "Style Transfer Prompt",
 }
