@@ -11,9 +11,12 @@ LLM backends supported (via configuration):
 """
 
 import json
+import logging
 import os
 import re
 from pathlib import Path
+
+logger = logging.getLogger("PromptForge")
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -279,14 +282,17 @@ class CharacterConsistencyNode:
 
 
 # ---------------------------------------------------------------------------
-# Node 3: StorySplitterNode
+# Node 3: StorySplitterNode (scene/shot/beat split, character injection,
+#          structured SCENE_LIST output)
 # ---------------------------------------------------------------------------
 
 class StorySplitterNode:
     """
-    Split a story or narrative into individual scene descriptions suitable
-    for image generation. Uses LLM to parse narrative text into discrete
-    visual scenes, each becoming a separate prompt.
+    Story scene splitter. Takes a long narrative text and splits it into
+    structured visual scenes for image generation using an LLM.
+
+    Supports scene/shot/beat split modes, optional CHARACTER_LIST injection,
+    and outputs a structured SCENE_LIST for downstream nodes.
     """
 
     @classmethod
@@ -296,85 +302,453 @@ class StorySplitterNode:
             "required": {
                 "story": ("STRING", {
                     "multiline": True,
-                    "tooltip": "Full story/narrative text to split into scenes",
+                    "default": "",
+                    "tooltip": "Paste narrative/story text to split into visual scenes...",
                 }),
                 "model": (models,),
-            },
-            "optional": {
-                "num_scenes": ("INT", {
-                    "default": 4,
-                    "min": 1,
+                "split_mode": (["scene", "shot", "beat"], {
+                    "default": "scene",
+                    "tooltip": "scene=by scene/location (recommended), shot=by camera shot (finer), beat=by emotional beat",
+                }),
+                "max_scenes": ("INT", {
+                    "default": 8,
+                    "min": 2,
                     "max": 20,
                     "step": 1,
-                    "tooltip": "Target number of scenes",
+                    "tooltip": "Maximum number of scenes to split into",
                 }),
+            },
+            "optional": {
+                "character_list": ("CHARACTER_LIST",),
                 "style_hint": ("STRING", {
                     "multiline": True,
                     "default": "",
-                    "tooltip": "Style instruction appended to each scene prompt",
+                    "tooltip": "Style hint (optional): e.g., anime style, photorealistic, cyberpunk...",
                 }),
                 "system_prompt": ("STRING", {
                     "multiline": True,
-                    "default": (
-                        "You are a visual storytelling assistant. "
-                        "Split the given story into discrete visual scenes. "
-                        "For each scene, provide a detailed image generation prompt. "
-                        "Output as a JSON array of objects with 'scene_number' and 'prompt' keys."
-                    ),
+                    "default": "",
+                    "tooltip": "Custom system prompt (leave empty for built-in default). Controls how LLM splits scenes and generates prompts.",
                 }),
             },
         }
 
-    RETURN_TYPES = ("STRING", "STRING", "INT")
-    RETURN_NAMES = ("scene_1", "scene_2", "scene_count")
+    RETURN_TYPES = ("SCENE_LIST", "STRING")
+    RETURN_NAMES = ("scene_list", "scene_summary")
     FUNCTION = "split_story"
     CATEGORY = "PromptForge/LLM"
 
-    def split_story(self, story, model, num_scenes=4, style_hint="",
-                    system_prompt=""):
-        user_prompt = (
-            f"Split this story into exactly {num_scenes} visual scenes.\n"
-            f"Each scene should be a detailed image generation prompt.\n"
-            f"{'Style: ' + style_hint if style_hint else ''}\n\n"
-            f"Story:\n{story}"
+    def split_story(self, story, model, split_mode="scene", max_scenes=8,
+                    character_list=None, style_hint="", system_prompt=""):
+
+        # Build character info
+        character_info = ""
+        if character_list:
+            char_parts = []
+            for char in character_list:
+                desc = f"- {char['name']}: {char.get('age', '')} {char.get('gender', '')}"
+                if char.get('appearance'):
+                    desc += f", {char['appearance']}"
+                if char.get('clothing'):
+                    desc += f", wearing {char['clothing']}"
+                if char.get('features'):
+                    desc += f", {char['features']}"
+                char_parts.append(desc)
+            character_info = "\n".join(char_parts)
+
+        # Split mode descriptions
+        mode_desc = {
+            "scene": "Scene-level split - divide by location/time/atmosphere changes, each image is a complete scene",
+            "shot": "Shot-level split - finer granularity, includes close-ups, medium shots, wide shots etc.",
+            "beat": "Beat-level split - divide by emotional/action turning points, suitable for dynamic narratives",
+        }
+
+        # System prompt: built-in default, user custom appended after
+        default_system_prompt = (
+            "You are a professional storyboard artist and visual director.\n"
+            "Your task is to analyze a story/narrative text and split it into visual scenes for image generation.\n"
+            "\n"
+            "CRITICAL RULES:\n"
+            "- Never use character names directly in visual_prompt. Always replace names with full character descriptions (appearance, age, gender, clothing, etc.).\n"
+            "- Use natural language descriptions in visual_prompt, not structured tags.\n"
+            "- Each visual_prompt MUST start with \"masterpiece, best quality, score_7, \" if not already present.\n"
+            "\n"
+            "For each scene, output a JSON object with:\n"
+            "- \"scene_id\": scene number (1, 2, 3...)\n"
+            "- \"scene_title\": brief title (2-5 words)\n"
+            "- \"scene_description\": what's happening in this scene (1-2 sentences)\n"
+            "- \"visual_prompt\": detailed image generation prompt in English (replace all character names with their physical descriptions)\n"
+            "- \"negative_prompt\": what to avoid in the image\n"
+            "- \"camera_angle\": suggested camera angle (close-up, medium shot, wide shot, etc.)\n"
+            "- \"mood\": emotional tone (happy, tense, peaceful, etc.)\n"
+            "\n"
+            "Output a JSON array of scenes. Example:\n"
+            "[\n"
+            "  {\n"
+            '    "scene_id": 1,\n'
+            '    "scene_title": "Morning Coffee",\n'
+            '    "scene_description": "Character sits at a cafe table, looking out the window.",\n'
+            '    "visual_prompt": "masterpiece, best quality, score_7, a young woman with black hair sitting at a wooden cafe table, morning sunlight through window, coffee cup, thoughtful expression, warm lighting",\n'
+            '    "negative_prompt": "worst quality, low quality, blurry, deformed",\n'
+            '    "camera_angle": "medium shot",\n'
+            '    "mood": "peaceful"\n'
+            "  }\n"
+            "]"
         )
 
-        response = _call_llm(user_prompt, system=system_prompt, model=model,
-                             temperature=0.7, max_tokens=4096)
+        # User custom prompt appended to built-in default
+        if system_prompt and system_prompt.strip():
+            final_system = default_system_prompt + "\n\nAdditional instructions:\n" + system_prompt.strip()
+        else:
+            final_system = default_system_prompt
 
-        # Try to parse JSON response
-        scenes = []
+        # Build user prompt
+        char_section = f"\nCharacters in the story:\n{character_info}\n" if character_info else ""
+        style_section = f"\nStyle hint: {style_hint}\n" if style_hint else ""
+
+        user_prompt = (
+            f"Please split the following story into {max_scenes} or fewer visual scenes.\n\n"
+            f"Split mode: {split_mode} - {mode_desc.get(split_mode, '')}\n"
+            f"{char_section}"
+            f"{style_section}"
+            f"Story text:\n---\n{story}\n---\n\n"
+            f"Output ONLY the JSON array, no other text."
+        )
+
         try:
-            # Extract JSON from response (handle markdown code blocks)
-            json_match = re.search(r'\[.*\]', response, re.DOTALL)
-            if json_match:
-                data = json.loads(json_match.group())
-                if isinstance(data, list):
-                    scenes = [item.get("prompt", str(item)) for item in data]
-        except (json.JSONDecodeError, AttributeError):
+            response = _call_llm(user_prompt, system=final_system, model=model,
+                                 temperature=0.7, max_tokens=4096)
+
+            logger.info(f"[Story Splitter] LLM raw response ({len(response)} chars):\n{response[:2000]}")
+
+            # Extract JSON
+            scenes = self._extract_json(response)
+            logger.info(f"[Story Splitter] Extracted {len(scenes)} scenes")
+
+            # Normalize field names
+            scenes = [self._normalize_scene(s) for s in scenes]
+
+            if not scenes:
+                scenes = [{"scene_id": 1, "scene_title": "Error",
+                           "scene_description": "Failed to parse AI response",
+                           "visual_prompt": story[:500],
+                           "camera_angle": "medium shot", "mood": "neutral"}]
+                summary = f"[Error] AI response parse failed, raw:\n{response[:1000]}"
+            else:
+                # Generate summary
+                summary_lines = [f"=== Story Split ({len(scenes)} scenes) ===\n"]
+                for scene in scenes:
+                    summary_lines.append(f"Scene {scene.get('scene_id', '?')}: {scene.get('scene_title', '?')}")
+                    summary_lines.append(f"  Description: {scene.get('scene_description', '?')}")
+                    summary_lines.append(f"  Camera: {scene.get('camera_angle', '?')} | Mood: {scene.get('mood', '?')}")
+                    summary_lines.append(f"  Prompt: {scene.get('visual_prompt', '?')[:80]}...")
+                    neg = scene.get('negative_prompt', '')
+                    if neg:
+                        summary_lines.append(f"  Negative: {neg[:60]}...")
+                    summary_lines.append("")
+                summary = "\n".join(summary_lines)
+
+        except Exception as e:
+            logger.error(f"[Story Splitter] Error: {e}")
+            scenes = [{"scene_id": 1, "scene_title": "Error",
+                       "scene_description": str(e),
+                       "visual_prompt": story[:500],
+                       "camera_angle": "medium shot", "mood": "neutral"}]
+            summary = f"[API Error] {str(e)}"
+
+        return (scenes, summary)
+
+    def _extract_json(self, text: str):
+        """Extract JSON array from AI response, compatible with multiple formats."""
+
+        def _normalize(obj):
+            """Normalize various JSON structures to [{}, {}, ...] format."""
+            if isinstance(obj, list):
+                dicts = [item for item in obj if isinstance(item, dict)]
+                if dicts:
+                    return dicts
+                strings = [item for item in obj if isinstance(item, str)]
+                if strings:
+                    return [
+                        {
+                            "scene_id": i + 1,
+                            "scene_title": f"Scene {i + 1}",
+                            "scene_description": s[:100],
+                            "visual_prompt": s,
+                            "camera_angle": "medium shot",
+                            "mood": "neutral",
+                        }
+                        for i, s in enumerate(strings)
+                    ]
+            if isinstance(obj, dict):
+                for v in obj.values():
+                    if isinstance(v, list):
+                        return _normalize(v)
+            return []
+
+        # 1. Try parsing entire text
+        try:
+            result = json.loads(text.strip())
+            normalized = _normalize(result)
+            if normalized:
+                return normalized
+        except Exception:
             pass
 
-        # Fallback: split by scene markers
-        if not scenes:
-            parts = re.split(r'(?:Scene\s+\d+|#{1,3}\s*Scene)', response, flags=re.IGNORECASE)
-            scenes = [p.strip() for p in parts if p.strip() and len(p.strip()) > 10]
+        # 2. Find ```json ... ``` blocks
+        json_match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
+        if json_match:
+            try:
+                result = json.loads(json_match.group(1))
+                normalized = _normalize(result)
+                if normalized:
+                    return normalized
+            except Exception:
+                pass
 
-        # Fallback: just split by newlines into chunks
-        if not scenes:
-            scenes = [s.strip() for s in response.split("\n\n") if s.strip() and len(s.strip()) > 10]
+        # 3. Find [ ... ] blocks
+        json_match = re.search(r'\[.*\]', text, re.DOTALL)
+        if json_match:
+            try:
+                result = json.loads(json_match.group(0))
+                normalized = _normalize(result)
+                if normalized:
+                    return normalized
+            except Exception:
+                pass
 
-        # Pad to at least 2 (for the two RETURN_TYPES)
-        while len(scenes) < 2:
-            scenes.append("")
+        return []
 
-        # Append style hint if present
-        if style_hint.strip():
-            scenes = [f"{s}, {style_hint.strip()}" if s else s for s in scenes]
+    # Field name normalization map (LLMs use various field names)
+    _KEY_MAP = {
+        "scene_id": "scene_id", "id": "scene_id", "number": "scene_id",
+        "scene_number": "scene_id", "no": "scene_id", "index": "scene_id",
+        "scene_title": "scene_title", "title": "scene_title",
+        "name": "scene_title", "heading": "scene_title",
+        "scene_description": "scene_description", "description": "scene_description",
+        "desc": "scene_description", "summary": "scene_description",
+        "scene_desc": "scene_description", "narrative": "scene_description",
+        "visual_prompt": "visual_prompt", "prompt": "visual_prompt",
+        "image_prompt": "visual_prompt", "img_prompt": "visual_prompt",
+        "sd_prompt": "visual_prompt", "generation_prompt": "visual_prompt",
+        "positive_prompt": "visual_prompt", "pos_prompt": "visual_prompt",
+        "camera_angle": "camera_angle", "camera": "camera_angle",
+        "shot": "camera_angle", "angle": "camera_angle",
+        "shot_type": "camera_angle", "framing": "camera_angle",
+        "mood": "mood", "emotion": "mood", "tone": "mood",
+        "atmosphere": "mood", "feeling": "mood",
+        "negative_prompt": "negative_prompt", "neg_prompt": "negative_prompt",
+        "negative": "negative_prompt",
+    }
 
-        scene_count = min(len(scenes), 20)  # Cap for return types
-        return (scenes[0] if len(scenes) > 0 else "",
-                scenes[1] if len(scenes) > 1 else "",
-                scene_count)
+    def _normalize_scene(self, scene: dict) -> dict:
+        """Normalize LLM field names to standard format."""
+        result = {}
+        for k, v in scene.items():
+            key = self._KEY_MAP.get(k.lower().strip(), k.lower().strip())
+            result[key] = v
+
+        defaults = {
+            "scene_id": "?",
+            "scene_title": "?",
+            "scene_description": "?",
+            "visual_prompt": "",
+            "negative_prompt": "",
+            "camera_angle": "medium shot",
+            "mood": "neutral",
+        }
+        for field, fallback in defaults.items():
+            if field not in result or not result[field]:
+                result[field] = fallback
+
+        return result
+
+
+# ---------------------------------------------------------------------------
+# Node 3b: SceneSelectorNode - select a single scene from the list
+# ---------------------------------------------------------------------------
+
+class SceneSelectorNode:
+    """
+    Scene selector. Pick a specific scene from a SCENE_LIST by index,
+    useful for generating images one at a time.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "scene_list": ("SCENE_LIST",),
+                "scene_index": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 100,
+                    "step": 1,
+                    "tooltip": "Which scene to select (0-indexed)",
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING", "STRING", "INT")
+    RETURN_NAMES = ("visual_prompt", "negative_prompt", "scene_title",
+                    "scene_description", "mood", "total_scenes")
+    FUNCTION = "select_scene"
+    CATEGORY = "PromptForge/LLM"
+
+    def select_scene(self, scene_list, scene_index=0):
+        total = len(scene_list)
+
+        if total == 0:
+            return ("", "", "Empty", "No scenes", "neutral", 0)
+
+        if scene_index >= total:
+            scene_index = total - 1
+
+        scene = scene_list[scene_index]
+
+        visual_prompt = scene.get("visual_prompt", "")
+        negative_prompt = scene.get("negative_prompt", "")
+        scene_title = scene.get("scene_title", f"Scene {scene_index + 1}")
+        scene_description = scene.get("scene_description", "")
+        mood = scene.get("mood", "neutral")
+
+        return (visual_prompt, negative_prompt, scene_title,
+                scene_description, mood, total)
+
+
+# ---------------------------------------------------------------------------
+# Node 3c: SceneListNode - view all scenes as formatted text
+# ---------------------------------------------------------------------------
+
+class SceneListNode:
+    """
+    Scene list viewer. Displays the full SCENE_LIST as readable text
+    with all scene details.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "scene_list": ("SCENE_LIST",),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "INT")
+    RETURN_NAMES = ("scenes_text", "total_scenes")
+    FUNCTION = "view_scenes"
+    CATEGORY = "PromptForge/LLM"
+
+    def view_scenes(self, scene_list):
+        total = len(scene_list)
+
+        lines = [f"=== Scene List ({total} scenes) ===\n"]
+
+        for scene in scene_list:
+            sid = scene.get("scene_id", "?")
+            title = scene.get("scene_title", "?")
+            desc = scene.get("scene_description", "")
+            prompt = scene.get("visual_prompt", "")
+            angle = scene.get("camera_angle", "?")
+            mood = scene.get("mood", "?")
+
+            lines.append(f"[Scene {sid}] {title}")
+            lines.append(f"  Description: {desc}")
+            lines.append(f"  Camera: {angle} | Mood: {mood}")
+            lines.append(f"  Prompt: {prompt}")
+            neg = scene.get("negative_prompt", "")
+            if neg:
+                lines.append(f"  Negative: {neg}")
+            lines.append("")
+
+        return ("\n".join(lines), total)
+
+
+# ---------------------------------------------------------------------------
+# Node 3d: SceneBatchOutputNode - batch output all prompts at once
+# ---------------------------------------------------------------------------
+
+class SceneBatchOutputNode:
+    """
+    Batch output all scene prompts. Uses separators between scenes
+    for easy copy-paste to other tools for batch generation.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "scene_list": ("SCENE_LIST",),
+                "separator": ("STRING", {
+                    "default": "---",
+                    "multiline": False,
+                    "tooltip": "Separator between scenes",
+                }),
+                "include_metadata": (["yes", "no"], {
+                    "default": "yes",
+                    "tooltip": "Include scene title and other metadata",
+                }),
+            },
+            "optional": {
+                "character_list": ("CHARACTER_LIST",),
+                "prepend_character": (["yes", "no"], {
+                    "default": "yes",
+                    "tooltip": "Prepend character descriptions to each prompt",
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("all_prompts", "prompts_only")
+    FUNCTION = "batch_output"
+    CATEGORY = "PromptForge/LLM"
+
+    def batch_output(self, scene_list, separator="---", include_metadata="yes",
+                     character_list=None, prepend_character="yes"):
+
+        # Build character prefix
+        char_prefix = ""
+        if character_list and prepend_character == "yes":
+            char_parts = []
+            for char in character_list:
+                desc = f"{char['name']}: {char.get('age', '')} {char.get('gender', '')}"
+                if char.get('appearance'):
+                    desc += f", {char['appearance']}"
+                if char.get('clothing'):
+                    desc += f", wearing {char['clothing']}"
+                if char.get('features'):
+                    desc += f", {char['features']}"
+                char_parts.append(desc)
+            char_prefix = "Characters: " + "; ".join(char_parts) + "\n\n"
+
+        all_prompts_lines = []
+        prompts_only_lines = []
+
+        for i, scene in enumerate(scene_list):
+            sid = scene.get("scene_id", i + 1)
+            title = scene.get("scene_title", f"Scene {sid}")
+            desc = scene.get("scene_description", "")
+            prompt = scene.get("visual_prompt", "")
+            angle = scene.get("camera_angle", "")
+            mood = scene.get("mood", "")
+
+            # Full output with metadata
+            if include_metadata == "yes":
+                all_prompts_lines.append(f"[Scene {sid}] {title}")
+                all_prompts_lines.append(f"Description: {desc}")
+                all_prompts_lines.append(f"Camera: {angle} | Mood: {mood}")
+                all_prompts_lines.append(f"Prompt: {char_prefix}{prompt}")
+            else:
+                all_prompts_lines.append(f"{char_prefix}{prompt}")
+
+            # Prompts-only output
+            prompts_only_lines.append(f"{char_prefix}{prompt}")
+
+            if i < len(scene_list) - 1:
+                all_prompts_lines.append(separator)
+                prompts_only_lines.append(separator)
+
+        return ("\n".join(all_prompts_lines), "\n".join(prompts_only_lines))
 
 
 # ---------------------------------------------------------------------------
@@ -604,6 +978,9 @@ NODE_CLASS_MAPPINGS = {
     "LLMChatNode": LLMChatNode,
     "CharacterConsistencyNode": CharacterConsistencyNode,
     "StorySplitterNode": StorySplitterNode,
+    "SceneSelectorNode": SceneSelectorNode,
+    "SceneListNode": SceneListNode,
+    "SceneBatchOutputNode": SceneBatchOutputNode,
     "ImageAnalyzerNode": ImageAnalyzerNode,
     "PromptEnhancerNode": PromptEnhancerNode,
 }
@@ -612,6 +989,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LLMChatNode": "LLM Chat",
     "CharacterConsistencyNode": "Character Consistency",
     "StorySplitterNode": "Story Splitter",
+    "SceneSelectorNode": "Scene Selector",
+    "SceneListNode": "Scene List View",
+    "SceneBatchOutputNode": "Scene Batch Output",
     "ImageAnalyzerNode": "Image Analyzer",
     "PromptEnhancerNode": "Prompt Enhancer",
 }
