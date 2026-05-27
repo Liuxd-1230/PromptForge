@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ComfyUI runtime artifacts
+*.ckpt
+*.safetensors
+*.pt
+*.pth
+*.bin
+
+# Logs / output
+*.log
+output/

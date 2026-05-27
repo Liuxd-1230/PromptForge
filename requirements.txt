@@ -1,0 +1,13 @@
+# PromptForge - Python dependencies
+# Core
+openai>=1.0.0
+requests>=2.31.0
+
+# Document / text processing
+chardet>=4.0.0
+langdetect>=1.0.9
+
+# Optional: uncomment as needed
+# Pillow>=10.0.0          # image manipulation
+# pyyaml>=6.0             # YAML config support
+# tqdm>=4.65.0            # progress bars

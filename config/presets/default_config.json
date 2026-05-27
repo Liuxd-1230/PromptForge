@@ -1,0 +1,12 @@
+{
+  "default_api": {
+    "url": "https://api.deepseek.com",
+    "model": "deepseek-chat"
+  },
+  "default_rules": {
+    "expand": "通用扩写",
+    "vision": "像素级描述",
+    "translate": "中英翻译"
+  },
+  "active_tag_file": "anime_tags.csv"
+}

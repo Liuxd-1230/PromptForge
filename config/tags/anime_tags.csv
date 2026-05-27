@@ -1,0 +1,74 @@
+分类,中文,English
+画质,杰作,masterpiece
+画质,最佳质量,best quality
+画质,高分辨率,highres
+画质,超高分辨率,absurdres
+画质,更多细节,Highly detailed
+画质,聚焦清晰,sharp focus
+画质,物理渲染,physically-based rendering
+画质,极详细刻画,extreme detail description
+画质,改善细节,Professional
+画质,添加鲜艳色彩,Vivid Colors
+负面,基础负面,low resolution,worst quality, low quality, normal quality, lowres
+负面,低分辨率,lowres
+负面,变异手指,mutated hands and fingers
+负面,畸形的,deformed
+负面,解剖不良,bad anatomy
+负面,毁容,disfigured
+负面,脸不好,poorly drawn face
+负面,多余肢体,extra limb
+负面,丑陋,ugly
+负面,手画得差,poorly drawn hands
+摄影,散景,Bokeh
+摄影,景深,depth of field
+摄影,广角,wide angle
+摄影,微距,macro shot
+摄影,逆光,backlighting
+摄影,侧光,side lighting
+摄影,丁达尔效应,tyndall effect
+摄影,边缘光,rim light
+动漫,赛璐璐,cel shading
+动漫,线条画,line art
+动漫,动漫风格,anime style
+动漫,动漫截图,anime screenshot
+动漫,官方美术,official art
+动漫,鲜艳色彩,vibrant colors
+动漫,网点纸,screen tones
+3D渲染,Octane渲染,octane render
+3D渲染,虚幻引擎5,unreal engine 5
+3D渲染,光线追踪,ray tracing
+3D渲染,SSS皮肤,sss skin
+3D渲染,V-Ray,v-ray
+人物,单人,solo
+人物,1个女孩,1girl
+人物,1个男孩,1boy
+人物,微笑,smile
+人物,长发,long hair
+人物,短发,short hair
+人物,蓝眼睛,blue eyes
+人物,红眼睛,red eyes
+服装,连衣裙,dress
+服装,校服,school uniform
+服装,白衬衫,white shirt
+服装,黑丝袜,black stockings
+服装,百褶裙,pleated skirt
+场景,户外,outdoors
+场景,室内,indoors
+场景,教室,classroom
+场景,公园,park
+场景,夜晚,night
+场景,雨天,rainy
+场景,雪天,snowy
+光影,自然光,natural lighting
+光影,戏剧性光线,dramatic lighting
+光影,柔光,soft lighting
+光影,硬光,hard lighting
+光影,霓虹光,neon lighting
+光影,金色阳光,golden hour
+风格,写实,realistic
+风格,水彩,watercolor
+风格,油画,oil painting
+风格,像素风,pixel art
+风格,赛博朋克,cyberpunk
+风格,蒸汽朋克,steampunk
+风格,吉卜力,Ghibli
