@@ -8,41 +8,13 @@ ComfyUI 智能提示词节点包，集成 LLM 对话、人物一致性、剧情�
 
 ## ✨ 功能概览
 
-### 🤖 LLM 对话
-- 支持 OpenAI 兼容 API（DeepSeek / 智谱 / OpenAI 等）
-- 支持本地 Ollama 模型
-- 多轮对话历史管理（滑动窗口）
-
-### 👤 人物一致性
-- 人物外貌锚点：定义角色外观，保持多图一致
-- 角色描述自动注入 prompt
-- 支持多人场景合并
-
-### 📖 剧情分镜
-- 将长剧情自动拆分成多个场景
-- 每个场景自动生成图片 prompt
-- 支持批量输出
-
-### 🖼️ 图片分析
-- 视觉 LLM 分析图片内容/风格/人物
-- 基于参考图生成 img2img prompt
-- 风格迁移 prompt 生成
-
-### ⚙️ 规则系统（12套预置规则）
-- **扩写规则**：通用扩写、人像大师、Tags 风格、Qwen-Edit、Kontext、Wan 视频
-- **视觉反推**：像素级描述、Tag 风格反推、编辑重绘
-- **翻译规则**：中↔英 AI 绘画术语精准翻译
-- **视频规则**：视频复刻、视频分镜解构
-
-### 🏷️ 标签预设
-- CSV 标签库管理（动漫/画质/摄影/3D/人物/服装/场景）
-- 支持多套标签切换
-- 一键插入常用标签
-
-### 🔄 提示词翻译
-- 中↔英 AI 绘画术语精准翻译
-- 保护权重符号、专有名词
-- 支持词典翻译 + LLM 翻译
+| 模块 | 节点数 | 说明 |
+|------|--------|------|
+| Config 配置 | 2 | API 配置、API 测试 |
+| Character 人物 | 2 | 人物锚点、人物合并 |
+| LLM 对话 | 6 | 对话、分镜、场景选择/查看/批量、图片分析 |
+| Prompt 工具 | 5 | 构建、标签预设、规则引擎、翻译、图生图 |
+| **总计** | **15** | |
 
 ---
 
@@ -60,25 +32,71 @@ pip install -r PromptForge/requirements.txt
 
 ## 🔧 全部节点
 
+### Config 配置类
+
+| 节点 | 说明 |
+|------|------|
+| PromptForge API 配置 | 连接 DeepSeek / 智谱 / OpenAI / Ollama |
+| PromptForge API 测试 | 测试连通性 + 获取模型列表 |
+
+### Character 人物类
+
+| 节点 | 说明 |
+|------|------|
+| PromptForge 人物锚点 | 定义角色外观，保持多图一致 |
+| PromptForge 人物合并 | 多角色合并，支持链式连接 |
+
 ### LLM 对话类
 
 | 节点 | 说明 |
 |------|------|
-| PromptForge LLM 对话 | 通用 LLM 对话（支持 OpenAI/Ollama） |
-| PromptForge 人物锚点 | 定义角色外观，保持多图一致 |
-| PromptForge 剧情分镜 | 长文本自动拆分为场景 |
-| PromptForge 图片分析 | 视觉 LLM 分析图片 |
-| PromptForge Prompt 增强 | LLM 扩写 + 负面词生成 |
+| PromptForge LLM 对话 | 多轮对话 + 历史管理 + prompt文件注入 |
+| PromptForge 剧情分镜 | 长文本拆分场景（scene/shot/beat 模式） |
+| PromptForge 场景选择 | 从场景列表选择指定场景 |
+| PromptForge 场景查看 | 查看所有场景详情 |
+| PromptForge 批量输出 | 批量输出所有 prompt |
+| PromptForge 图片分析 | 视觉 LLM 分析图片内容/风格 |
 
 ### Prompt 工具类
 
 | 节点 | 说明 |
 |------|------|
 | PromptForge Prompt 构建 | 组合正面/负面 prompt + 标签注入 |
-| PromptForge 标签预设 | 加载/管理 CSV 标签库 |
-| PromptForge 规则引擎 | 加载/切换 prompt 规则文件 |
-| PromptForge 翻译 | 中↔英 AI 绘画术语翻译 |
-| PromptForge Prompt 拆分 | 按分隔符拆分为 4 段 |
+| PromptForge 标签预设 | CSV 标签库管理，一键插入 |
+| PromptForge 规则引擎 | 加载/切换 prompt 规则文件（15套预置） |
+| PromptForge 翻译 | 中↔英 AI 绘画术语精准翻译 |
+| PromptForge 图生图Prompt | 基于参考图分析生成 img2img prompt |
+
+---
+
+## 📋 预置规则（15套）
+
+### 扩写规则（6套）
+| 规则 | 用途 |
+|------|------|
+| 扩写-通用 | 全学科自动识别领域，深度扩写 |
+| 扩写-人像大师 | 人像摄影专用，五维细节填充 |
+| 扩写-Tags风格 | Danbooru 标签流，SD 专用权重 |
+| Qwen-Image-Edit 指令优化 | 图像编辑指令优化 |
+| Kontext 指令优化并翻译 | Flux Kontext 编辑指令 |
+| Wan 视频提示词 | 通义万相视频提示词 |
+
+### 视觉反推规则（8套）
+| 规则 | 用途 |
+|------|------|
+| 像素级描述 | 全要素提取，像素级精度 |
+| 图像描述-Tag风格 | Danbooru 标签流反推 |
+| 图像编辑重绘 | 编辑指令生成 |
+| Qwen-Edit 指令优化-视觉版 | 结合视觉推理的编辑指令 |
+| Kontext 指令优化-视觉版 | 英文编辑指令，角色一致性 |
+| Detail Caption | 英文详细描述反推 |
+| Caption-Tags | 英文标签流反推 |
+| 图像到视频提示词 | 图生视频 prompt |
+
+### 翻译规则（1套）
+| 规则 | 用途 |
+|------|------|
+| 中英翻译 | AI 绘画术语精准翻译 |
 
 ---
 
@@ -104,9 +122,9 @@ pip install -r PromptForge/requirements.txt
 [用户输入] → [规则引擎: Tags风格] → 优化后的 prompt → 生图
 ```
 
-### 5. 图片反推 → 风格迁移
+### 5. 图片反推 → img2img
 ```
-[参考图] → [图片分析] → [Prompt 增强] → img2img prompt → 生图
+[参考图] → [图片分析] → [图生图Prompt] → img2img prompt → 生图
 ```
 
 ---
@@ -115,53 +133,33 @@ pip install -r PromptForge/requirements.txt
 
 ```
 PromptForge/
-├── __init__.py              # ComfyUI 节点注册
-├── nodes_prompt.py          # Prompt 工具节点（5个）
-├── nodes_llm.py             # LLM 对话节点（5个）
-├── requirements.txt         # Python 依赖
+├── __init__.py              # 节点注册
+├── nodes_config.py          # API 配置/测试 (2)
+├── nodes_character.py       # 人物锚点/合并 (2)
+├── nodes_llm.py             # LLM 对话/分镜/分析 (6)
+├── nodes_prompt.py          # Prompt 工具 (5)
 ├── config/
 │   ├── rules/
-│   │   ├── expand/          # 扩写规则（6套）
-│   │   ├── vision/          # 视觉反推规则（3套）
-│   │   ├── translate/       # 翻译规则（1套）
-│   │   └── video/           # 视频规则（2套）
+│   │   ├── expand/          # 扩写规则 (6套)
+│   │   ├── vision/          # 视觉反推规则 (8套)
+│   │   └── translate/       # 翻译规则 (1套)
 │   ├── tags/
-│   │   └── anime_tags.csv   # 动漫标签库（80+标签）
+│   │   └── anime_tags.csv   # 标签库 (80+)
 │   └── presets/
 │       └── default_config.json
+├── requirements.txt
 └── README.md
 ```
 
 ---
 
-## 📋 预置规则列表
-
-| 分类 | 规则名 | 用途 |
-|------|--------|------|
-| 扩写 | 通用扩写 | 全学科自动识别领域，深度扩写 |
-| 扩写 | 人像大师 | 人像摄影专用，五维细节填充 |
-| 扩写 | Tags 风格 | Danbooru 标签流，SD 专用权重 |
-| 扩写 | Qwen-Edit 指令 | 图像编辑指令优化 |
-| 扩写 | Kontext 指令 | Flux Kontext 编辑指令 |
-| 扩写 | Wan 视频 | 通义万相视频提示词 |
-| 视觉 | 像素级描述 | 全要素提取，像素级精度 |
-| 视觉 | Tag 风格反推 | Danbooru 标签流反推 |
-| 视觉 | 编辑重绘 | 编辑指令生成 |
-| 翻译 | 中英翻译 | AI 绘画术语精准翻译 |
-| 视频 | 视频复刻 | 精准复刻或创意重构 |
-| 视频 | 视频分镜 | 视频→分镜→结构化指令 |
-
----
-
 ## 🗺️ 开发路线
 
-- [x] 基础框架 + 节点注册
-- [x] LLM 对话 + 人物一致性
-- [x] 剧情分镜 + 图片分析
-- [x] 规则系统 + 标签预设
-- [x] 翻译 + Prompt 工具
-- [ ] Anima 适配节点（LLLite、加速）
-- [ ] 小助手 UI（节点悬浮按钮）
+- [x] 基础框架 + 15个节点
+- [x] 规则系统（15套预置规则）
+- [x] 标签预设（80+ 标签）
+- [ ] Anima 适配节点
+- [ ] 小助手 UI
 
 ---
 
