@@ -1,57 +1,11 @@
 """
-PromptForge - Prompt Building Nodes
-
-Nodes for constructing, transforming, and managing image generation prompts.
-Includes: tag presets, rule engine, translation, prompt assembly/composition.
+PromptForge - Prompt Nodes
+构建、标签、规则、翻译、图生图
 """
-
 import json
 import os
-import re
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Utility helpers
-# ---------------------------------------------------------------------------
-
-_CONFIG_DIR = Path(__file__).parent / "config"
-
-
-def _load_json(path: Path):
-    """Load a JSON file, returning empty dict/list on failure."""
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def _save_json(path: Path, data):
-    """Persist data as JSON, creating parent dirs as needed."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-
-def _get_tag_files():
-    """Return a list of available tag preset filenames (without extension)."""
-    tag_dir = _CONFIG_DIR / "tags"
-    tag_dir.mkdir(parents=True, exist_ok=True)
-    return sorted(p.stem for p in tag_dir.glob("*.json"))
-
-
-def _get_rule_dirs():
-    """Return available rule categories (subdirs under config/rules)."""
-    rules_dir = _CONFIG_DIR / "rules"
-    rules_dir.mkdir(parents=True, exist_ok=True)
-    return sorted(
-        d.name for d in rules_dir.iterdir() if d.is_dir()
-    )
-
-
-# ---------------------------------------------------------------------------
-# Node 1: PromptBuilder
-# ---------------------------------------------------------------------------
 
 class PromptBuilder:
     """
@@ -141,6 +95,7 @@ class PromptBuilder:
 # Node 2: TagPresetManager
 # ---------------------------------------------------------------------------
 
+
 class TagPresetManager:
     """
     Load, preview, and save tag presets. Presets are JSON files stored under
@@ -206,6 +161,7 @@ class TagPresetManager:
 # ---------------------------------------------------------------------------
 # Node 3: PromptRuleEngine
 # ---------------------------------------------------------------------------
+
 
 class PromptRuleEngine:
     """
@@ -294,6 +250,7 @@ class PromptRuleEngine:
 # Node 4: PromptTranslator
 # ---------------------------------------------------------------------------
 
+
 class PromptTranslator:
     """
     Translate prompt text between languages using an external LLM call
@@ -365,43 +322,6 @@ class PromptTranslator:
 # ---------------------------------------------------------------------------
 # Node 5: PromptSplitter
 # ---------------------------------------------------------------------------
-
-class PromptSplitter:
-    """
-    Split a long prompt into structured segments for weighted or
-    section-based editing (e.g., subject, style, environment, lighting).
-    """
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "prompt": ("STRING", {
-                    "multiline": True,
-                    "tooltip": "Full prompt to split",
-                }),
-            },
-            "optional": {
-                "delimiter": ("STRING", {
-                    "default": "|",
-                    "tooltip": "Delimiter used to separate prompt sections",
-                }),
-            },
-        }
-
-    RETURN_TYPES = ("STRING", "STRING", "STRING", "STRING")
-    RETURN_NAMES = ("section_1", "section_2", "section_3", "section_4")
-    FUNCTION = "split_prompt"
-    CATEGORY = "PromptForge/Prompt"
-
-    def split_prompt(self, prompt, delimiter="|"):
-        sections = [s.strip() for s in prompt.split(delimiter) if s.strip()]
-        # Pad to 4 sections
-        while len(sections) < 4:
-            sections.append("")
-        return tuple(sections[:4])
-
-        return tuple(sections[:4])
 
 
 class Img2ImgPromptNode:
@@ -552,143 +472,24 @@ Output format:
         return (img2img_prompt, negative_prompt, strength)
 
 
-class StyleTransferPromptNode:
-    """
-    风格迁移Prompt生成
-    将一张图的风格应用到另一张图的内容上
-    """
+# ============================================================
+# 3. 图片混合/风格迁移提示节点
+# ============================================================
+class
 
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "api_config": ("API_CONFIG",),
-                "model": ("STRING", {"multiline": False, "default": "deepseek-chat"}),
-                "content_description": ("STRING", {
-                    "multiline": True,
-                    "default": "",
-                    "placeholder": "内容图的描述（或从图片分析节点获取）"
-                }),
-                "style_description": ("STRING", {
-                    "multiline": True,
-                    "default": "",
-                    "placeholder": "风格图的描述（或从图片分析节点获取）"
-                }),
-            },
-            "optional": {
-                "character_list": ("CHARACTER_LIST",),
-                "style_weight": ("FLOAT", {
-                    "default": 0.6,
-                    "min": 0,
-                    "max": 1,
-                    "step": 0.05,
-                    "tooltip": "风格权重（0=只用内容，1=只用风格）"
-                }),
-                "system_prompt": ("STRING", {
-                    "multiline": True,
-                    "default": "",
-                    "placeholder": "自定义系统提示词（留空使用内置默认）。用于控制LLM如何融合风格和内容，例如：指定画风标签、质量要求、输出格式等"
-                }),
-            }
-        }
-
-    RETURN_TYPES = ("STRING", "STRING")
-    RETURN_NAMES = ("transfer_prompt", "negative_prompt")
-    FUNCTION = "generate_transfer_prompt"
-    CATEGORY = "PromptForge/Image"
-
-    def generate_transfer_prompt(self, api_config, model, content_description, style_description,
-                                  character_list=None, style_weight=0.6, system_prompt=""):
-
-        from openai import OpenAI
-
-        api_url = api_config["api_url"]
-        api_key = api_config["api_key"]
-
-        if not model or model.strip() == "":
-            model = api_config.get("default_model", "deepseek-chat")
-
-        base_url = api_url if api_url.endswith("/v1") else f"{api_url}/v1"
-        client = OpenAI(api_key=api_key, base_url=base_url)
-
-        character_info = ""
-        if character_list:
-            char_parts = []
-            for char in character_list:
-                desc = f"{char['name']}: {char['appearance']}"
-                char_parts.append(desc)
-            character_info = "Characters: " + "; ".join(char_parts)
-
-        if not system_prompt or system_prompt.strip() == "":
-            system_prompt = """You are an expert at combining artistic styles with image content.
-Generate a Stable Diffusion prompt that applies the style from one image to the content of another.
-
-Output format:
-[positive prompt]
-[NEGATIVE]
-[negative prompt]"""
-
-        user_prompt = f"""Content to render: {content_description}
-
-Style to apply: {style_description}
-
-Style weight: {style_weight} (0=content only, 1=style only)
-
-{character_info if character_info else ""}
-
-Generate a prompt that renders the content in the given style.
-Output format:
-[positive prompt]
-[NEGATIVE]
-[negative prompt]"""
-
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=1500,
-                temperature=0.7,
-                stream=False
-            )
-
-            result = response.choices[0].message.content
-
-            if "[NEGATIVE]" in result:
-                parts = result.split("[NEGATIVE]")
-                transfer_prompt = parts[0].strip()
-                negative_prompt = parts[1].strip()
-            else:
-                transfer_prompt = result.strip()
-                negative_prompt = "blurry, low quality, deformed, ugly, bad anatomy"
-
-        except Exception as e:
-            transfer_prompt = f"[Error] {str(e)}"
-            negative_prompt = ""
-
-        return (transfer_prompt, negative_prompt)
-
-
-# ---------------------------------------------------------------------------\n# Registration\n# ---------------------------------------------------------------------------\n
 
 NODE_CLASS_MAPPINGS = {
     "PromptBuilder": PromptBuilder,
     "TagPresetManager": TagPresetManager,
     "PromptRuleEngine": PromptRuleEngine,
     "PromptTranslator": PromptTranslator,
-    "PromptSplitter": PromptSplitter,
     "Img2ImgPromptNode": Img2ImgPromptNode,
-    "StyleTransferPromptNode": StyleTransferPromptNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "PromptBuilder": "Prompt Builder",
-    "TagPresetManager": "Tag Preset Manager",
-    "PromptRuleEngine": "Prompt Rule Engine",
-    "PromptTranslator": "Prompt Translator",
-    "PromptSplitter": "Prompt Splitter",
-    "Img2ImgPromptNode": "Img2Img Prompt",
-    "StyleTransferPromptNode": "Style Transfer Prompt",
+    "PromptBuilder": "PromptForge Prompt 构建",
+    "TagPresetManager": "PromptForge 标签预设",
+    "PromptRuleEngine": "PromptForge 规则引擎",
+    "PromptTranslator": "PromptForge 翻译",
+    "Img2ImgPromptNode": "PromptForge 图生图Prompt",
 }
