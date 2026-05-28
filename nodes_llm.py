@@ -231,7 +231,6 @@ class LLMChatNode:
 # ============================================================
 # 6. 历史记录清空节点
 # ============================================================
-class
 
 
 class StorySplitterNode:
@@ -546,7 +545,6 @@ Output ONLY the JSON array, no other text."""
 # ============================================================
 # 2. 场景选择节点 - 从场景列表中选择一个
 # ============================================================
-class
 
 
 class SceneSelectorNode:
@@ -599,7 +597,6 @@ class SceneSelectorNode:
 # ============================================================
 # 3. 场景列表查看节点
 # ============================================================
-class
 
 
 class SceneListNode:
@@ -648,7 +645,6 @@ class SceneListNode:
 # ============================================================
 # 4. 批量Prompt输出节点 - 一次性输出所有prompt
 # ============================================================
-class
 
 
 class SceneBatchOutputNode:
@@ -885,6 +881,7 @@ class ImageAnalyzerNode:
         return (analysis, extracted_prompt)
 
     def _extract_prompt_elements(self, analysis: str, mode: str) -> str:
+        pass
 
 
 NODE_CLASS_MAPPINGS = {
