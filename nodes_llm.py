@@ -76,7 +76,18 @@ class LLMChatNode:
                 }),
                 "enable_thinking": (["disable", "enable"], {
                     "default": "disable",
-                    "tooltip": "思考模式：enable=让AI先思考再回答（更慢但更准确），disable=直接回答（更快）"
+                    "tooltip": "思考模式：enable=DeepSeek原生思考（更慢但更准确），disable=直接回答"
+                }),
+                "thinking_budget_tokens": ("INT", {
+                    "default": 4096,
+                    "min": 512,
+                    "max": 32768,
+                    "step": 512,
+                    "tooltip": "思考预算token数（仅思考模式开启时生效）。越大思考越深入，推荐4096-8192"
+                }),
+                "enable_search": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "联网搜索：开启后模型会搜索互联网获取最新信息（仅DeepSeek V4支持）"
                 }),
                 "top_p": ("FLOAT", {"default": 1.0, "min": 0, "max": 1, "step": 0.05}),
                 "presence_penalty": ("FLOAT", {"default": 0, "min": -2, "max": 2, "step": 0.1}),
@@ -98,7 +109,8 @@ class LLMChatNode:
              max_tokens, temperature,
              character_list=None, character_prompt_mode="prepend_to_user",
              chat_history=None, history_mode="sliding_window", max_history_turns=10,
-             enable_thinking="disable",
+             enable_thinking="disable", thinking_budget_tokens=4096,
+             enable_search=False,
              top_p=1.0, presence_penalty=0, frequency_penalty=0,
              prompt_file_content=""):
 
@@ -178,31 +190,20 @@ class LLMChatNode:
         # ===== 调用API =====
         thinking_text = ""
         try:
-            # 思考模式处理
+            # 构建 extra_body（DeepSeek V4 原生参数）
+            extra_body = {}
+
+            # 思考模式：DeepSeek 原生 thinking API
             if enable_thinking == "enable":
-                # 先让AI思考
-                think_messages = messages.copy()
-                think_messages.append({
-                    "role": "user",
-                    "content": "Please think step by step about how to respond to the above request. Output your thinking process, then provide your final answer."
-                })
+                extra_body["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": thinking_budget_tokens
+                }
 
-                think_response = client.chat.completions.create(
-                    model=model,
-                    messages=think_messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    presence_penalty=presence_penalty,
-                    frequency_penalty=frequency_penalty,
-                    stream=False
-                )
-                thinking_text = think_response.choices[0].message.content
+            # 联网搜索
+            if enable_search:
+                extra_body["enable_search"] = True
 
-                # 把思考结果加入上下文，获取最终回答
-                messages.append({"role": "assistant", "content": f"[Thinking Process]\n{thinking_text}\n\n[Final Answer]"})
-
-            # 正常调用获取回答
             response = client.chat.completions.create(
                 model=model,
                 messages=messages,
@@ -211,9 +212,14 @@ class LLMChatNode:
                 top_p=top_p,
                 presence_penalty=presence_penalty,
                 frequency_penalty=frequency_penalty,
-                stream=False
+                stream=False,
+                **({"extra_body": extra_body} if extra_body else {})
             )
-            response_text = response.choices[0].message.content
+
+            # 提取思考内容（DeepSeek V4 返回 reasoning_content）
+            choice = response.choices[0]
+            response_text = choice.message.content or ""
+            thinking_text = getattr(choice.message, "reasoning_content", None) or ""
 
         except Exception as e:
             response_text = f"[API Error] {str(e)}"
