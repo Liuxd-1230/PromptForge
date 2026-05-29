@@ -4,7 +4,51 @@ PromptForge - Prompt Nodes
 """
 import json
 import os
+import re
 from pathlib import Path
+
+# config/ 目录：PromptForge/config/
+_CONFIG_DIR = Path(__file__).parent / "config"
+
+
+def _load_json(path):
+    """加载 JSON 文件，失败返回 None"""
+    path = Path(path)
+    if not path.exists():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _save_json(path, data):
+    """保存数据到 JSON 文件"""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _get_tag_files():
+    """返回 config/tags/ 下所有 .json 文件的文件名（不含扩展名）"""
+    tags_dir = _CONFIG_DIR / "tags"
+    if not tags_dir.exists():
+        return []
+    return sorted(
+        p.stem for p in tags_dir.glob("*.json") if p.is_file()
+    )
+
+
+def _get_rule_dirs():
+    """返回 config/rules/ 下所有子目录名"""
+    rules_dir = _CONFIG_DIR / "rules"
+    if not rules_dir.exists():
+        return []
+    return sorted(
+        d.name for d in rules_dir.iterdir() if d.is_dir()
+    )
 
 
 class PromptBuilder:
