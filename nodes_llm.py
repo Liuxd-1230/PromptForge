@@ -78,12 +78,9 @@ class LLMChatNode:
                     "default": "disable",
                     "tooltip": "思考模式：enable=DeepSeek原生思考（更慢但更准确），disable=直接回答"
                 }),
-                "thinking_budget_tokens": ("INT", {
-                    "default": 4096,
-                    "min": 512,
-                    "max": 32768,
-                    "step": 512,
-                    "tooltip": "思考预算token数（仅思考模式开启时生效）。越大思考越深入，推荐4096-8192"
+                "reasoning_effort": (["high", "max"], {
+                    "default": "high",
+                    "tooltip": "思考强度：high=深度思考（推荐），max=极致思考（更慢但更全面）。思考模式关闭时无效"
                 }),
                 "enable_search": ("BOOLEAN", {
                     "default": False,
@@ -109,7 +106,7 @@ class LLMChatNode:
              max_tokens, temperature,
              character_list=None, character_prompt_mode="prepend_to_user",
              chat_history=None, history_mode="sliding_window", max_history_turns=10,
-             enable_thinking="disable", thinking_budget_tokens=4096,
+             enable_thinking="disable", reasoning_effort="high",
              enable_search=False,
              top_p=1.0, presence_penalty=0, frequency_penalty=0,
              prompt_file_content=""):
@@ -195,26 +192,34 @@ class LLMChatNode:
 
             # 思考模式：DeepSeek 原生 thinking API
             if enable_thinking == "enable":
-                extra_body["thinking"] = {
-                    "type": "enabled",
-                    "budget_tokens": thinking_budget_tokens
-                }
+                extra_body["thinking"] = {"type": "enabled"}
 
             # 联网搜索
             if enable_search:
                 extra_body["enable_search"] = True
 
-            response = client.chat.completions.create(
+            # 思考模式下 temperature/top_p/presence_penalty/frequency_penalty 不生效
+            kwargs = dict(
                 model=model,
                 messages=messages,
                 max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                presence_penalty=presence_penalty,
-                frequency_penalty=frequency_penalty,
                 stream=False,
-                **({"extra_body": extra_body} if extra_body else {})
             )
+            if enable_thinking != "enable":
+                # 非思考模式才传这些参数
+                kwargs["temperature"] = temperature
+                kwargs["top_p"] = top_p
+                kwargs["presence_penalty"] = presence_penalty
+                kwargs["frequency_penalty"] = frequency_penalty
+                kwargs["reasoning_effort"] = reasoning_effort
+            else:
+                # 思考模式：reasoning_effort 作为顶级参数
+                kwargs["reasoning_effort"] = reasoning_effort
+
+            if extra_body:
+                kwargs["extra_body"] = extra_body
+
+            response = client.chat.completions.create(**kwargs)
 
             # 提取思考内容（DeepSeek V4 返回 reasoning_content）
             choice = response.choices[0]
