@@ -89,10 +89,19 @@ class LLMChatNode:
                 "top_p": ("FLOAT", {"default": 1.0, "min": 0, "max": 1, "step": 0.05}),
                 "presence_penalty": ("FLOAT", {"default": 0, "min": -2, "max": 2, "step": 0.1}),
                 "frequency_penalty": ("FLOAT", {"default": 0, "min": -2, "max": 2, "step": 0.1}),
+                "file_path": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "tooltip": "本地文件路径（支持txt/json/md等），内容会自动读取并注入到prompt中"
+                }),
+                "file_inject_mode": (["append_to_system", "replace_system", "append_to_user"], {
+                    "default": "append_to_system",
+                    "tooltip": "文件内容注入位置：append_to_system=追加到系统提示词后面（推荐），replace_system=替换系统提示词，append_to_user=追加到用户输入后面"
+                }),
                 "prompt_file_content": ("STRING", {
                     "default": "",
                     "multiline": True,
-                    "tooltip": "从 Prompt 文件加载节点连接，内容会注入到系统提示词中作为生成规则"
+                    "tooltip": "或直接粘贴文本内容（优先级低于file_path，两者都有时合并）"
                 }),
             }
         }
@@ -109,6 +118,7 @@ class LLMChatNode:
              enable_thinking="disable", reasoning_effort="high",
              enable_search=False,
              top_p=1.0, presence_penalty=0, frequency_penalty=0,
+             file_path="", file_inject_mode="append_to_system",
              prompt_file_content=""):
 
         from openai import OpenAI
@@ -149,11 +159,35 @@ class LLMChatNode:
         # ===== 构建消息列表 =====
         messages = []
 
-        # 1. 系统提示词
+        # 读取文件内容
+        file_content = ""
+        if file_path and file_path.strip():
+            try:
+                fp = Path(file_path.strip())
+                if fp.exists() and fp.is_file():
+                    file_content = fp.read_text(encoding="utf-8")
+                else:
+                    file_content = f"[File not found: {file_path.strip()}]"
+            except Exception as e:
+                file_content = f"[File read error: {e}]"
+
+        # 合并文件内容和粘贴内容
+        extra_content = ""
+        if file_content and prompt_file_content and prompt_file_content.strip():
+            extra_content = f"{file_content.strip()}\n\n---\n\n{prompt_file_content.strip()}"
+        elif file_content:
+            extra_content = file_content.strip()
+        elif prompt_file_content and prompt_file_content.strip():
+            extra_content = prompt_file_content.strip()
+
+        # 1. 系统提示词 + 注入模式
         final_system_prompt = system_prompt
-        # 注入 Prompt 文件内容（作为生成规则）
-        if prompt_file_content and prompt_file_content.strip():
-            final_system_prompt = f"{final_system_prompt}\n\n--- Prompt Rules ---\n{prompt_file_content.strip()}\n--- End Rules ---"
+        if extra_content:
+            if file_inject_mode == "replace_system":
+                final_system_prompt = extra_content
+            elif file_inject_mode == "append_to_system":
+                final_system_prompt = f"{final_system_prompt}\n\n--- Reference Content ---\n{extra_content}\n--- End Reference ---"
+
         if character_prompt and character_prompt_mode == "prepend_to_system":
             final_system_prompt = f"{character_prompt}\n\n{final_system_prompt}"
         messages.append({"role": "system", "content": final_system_prompt})
@@ -176,6 +210,9 @@ class LLMChatNode:
 
         # 3. 构建用户提示词
         final_user_prompt = user_prompt
+        # 文件内容追加到用户输入后面
+        if extra_content and file_inject_mode == "append_to_user":
+            final_user_prompt = f"{user_prompt}\n\n--- Reference Content ---\n{extra_content}\n--- End Reference ---"
         if character_prompt:
             if character_prompt_mode == "prepend_to_user":
                 final_user_prompt = f"{character_prompt}\n\nUser request: {user_prompt}"
