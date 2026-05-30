@@ -129,16 +129,23 @@ class LLMChatNode:
                     "default": "high",
                     "tooltip": "思考强度：high=深度思考（推荐），max=极致思考（更慢但更全面）。思考模式关闭时无效"
                 }),
-                "enable_web_search": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "联网搜索：开启后自动用Bing搜索用户问题，将结果注入prompt（需要能访问bing.com）"
+                "web_search_mode": (["off", "always", "ai_decides"], {
+                    "default": "off",
+                    "tooltip": "联网搜索模式：off=关闭，always=始终搜索后注入结果，ai_decides=AI自主决定是否搜索（Tool Calling）"
                 }),
                 "web_search_max_results": ("INT", {
                     "default": 5,
                     "min": 1,
                     "max": 10,
                     "step": 1,
-                    "tooltip": "搜索返回的最大结果数"
+                    "tooltip": "每次搜索返回的最大结果数"
+                }),
+                "web_search_max_rounds": ("INT", {
+                    "default": 5,
+                    "min": 1,
+                    "max": 10,
+                    "step": 1,
+                    "tooltip": "ai_decides模式下最多搜索轮数（防止无限循环）"
                 }),
 
                 "file_path": ("STRING", {
@@ -169,7 +176,7 @@ class LLMChatNode:
              chat_history=None, history_mode="sliding_window", max_history_turns=10,
              enable_thinking="disable",
              reasoning_effort="high",
-             enable_web_search=False, web_search_max_results=5,
+             web_search_mode="off", web_search_max_results=5, web_search_max_rounds=5,
              file_path="", file_inject_mode="append_to_system",
              prompt_file_content=""):
 
@@ -261,10 +268,10 @@ class LLMChatNode:
             messages.extend(non_system_history)
 
         # 3. 构建用户提示词
+        # 3. 构建用户提示词
         final_user_prompt = user_prompt
-
-        # 联网搜索：抓取Bing结果注入到用户提示词前面
-        if enable_web_search and user_prompt.strip():
+        # always模式：先搜索再注入结果
+        if web_search_mode == "always" and user_prompt.strip():
             search_results = self._bing_search(user_prompt.strip(), web_search_max_results)
             final_user_prompt = f"--- Web Search Results ---\n{search_results}\n--- End Search Results ---\n\nUser request: {user_prompt}"
 
@@ -279,39 +286,115 @@ class LLMChatNode:
 
         messages.append({"role": "user", "content": final_user_prompt})
 
+        # ===== ai_decides模式：注入Tool Calling系统提示词 =====
+        if web_search_mode == "ai_decides":
+            tool_system_addon = (
+                "\n\n## Web Search Tool\n"
+                "You have access to a web search tool. When you need current information, "
+                "real-time data, or facts you're unsure about, use the tool to search the web.\n"
+                "To search, call the `web_search` function with a search query.\n"
+                "You can call the search tool multiple times with different queries if needed.\n"
+                "When you have enough information, provide your final answer directly.\n"
+                "Do NOT fabricate information — if you're uncertain, search for it."
+            )
+            messages[0]["content"] = messages[0]["content"] + tool_system_addon
+
         # ===== 调用API =====
         thinking_text = ""
-        try:
-            # 构建 extra_body（DeepSeek V4 原生参数）
-            extra_body = {}
 
-            # 思考模式：DeepSeek 原生 thinking API
-            if enable_thinking == "enable":
-                extra_body["thinking"] = {"type": "enabled"}
-            else:
-                # 显式关闭思考模式，防止模型仍然思考
-                extra_body["thinking"] = {"type": "disabled"}
-
-            kwargs = dict(
+        def _build_api_kwargs(msgs):
+            """构建API请求参数"""
+            kw = dict(
                 model=model,
-                messages=messages,
+                messages=msgs,
                 max_tokens=max_tokens,
                 stream=False,
             )
-
-            # reasoning_effort 仅在思考模式开启时传递
+            eb = {}
             if enable_thinking == "enable":
-                kwargs["reasoning_effort"] = reasoning_effort
+                eb["thinking"] = {"type": "enabled"}
+                kw["reasoning_effort"] = reasoning_effort
+            else:
+                eb["thinking"] = {"type": "disabled"}
+            if eb:
+                kw["extra_body"] = eb
+            # ai_decides模式需要传tools定义
+            if web_search_mode == "ai_decides":
+                kw["tools"] = [{
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "description": "Search the web for current information. Use this when you need real-time data, facts, or anything you're unsure about.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "The search query to find information"
+                                }
+                            },
+                            "required": ["query"]
+                        }
+                    }
+                }]
+            return kw
 
-            if extra_body:
-                kwargs["extra_body"] = extra_body
+        try:
+            if web_search_mode == "ai_decides":
+                # ===== Tool Calling循环 =====
+                response_text = ""
+                for round_i in range(web_search_max_rounds):
+                    kwargs = _build_api_kwargs(messages)
+                    response = client.chat.completions.create(**kwargs)
+                    choice = response.choices[0]
+                    msg = choice.message
 
-            response = client.chat.completions.create(**kwargs)
+                    # 提取思考内容
+                    rc = getattr(msg, "reasoning_content", None) or ""
+                    if rc:
+                        thinking_text = (thinking_text + "\n" + rc).strip()
 
-            # 提取思考内容（DeepSeek V4 返回 reasoning_content）
-            choice = response.choices[0]
-            response_text = choice.message.content or ""
-            thinking_text = getattr(choice.message, "reasoning_content", None) or ""
+                    # 检查是否有tool_calls
+                    if msg.tool_calls:
+                        # 先把assistant消息（带tool_calls）加入历史
+                        messages.append({
+                            "role": "assistant",
+                            "content": msg.content or "",
+                            "tool_calls": [
+                                {"id": tc.id, "type": "function", "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                                for tc in msg.tool_calls
+                            ]
+                        })
+                        # 执行每个tool call
+                        for tc in msg.tool_calls:
+                            if tc.function.name == "web_search":
+                                try:
+                                    args = json.loads(tc.function.arguments)
+                                    query = args.get("query", "")
+                                except:
+                                    query = user_prompt
+                                search_result = self._bing_search(query, web_search_max_results)
+                                messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": tc.id,
+                                    "content": search_result
+                                })
+                        # 继续下一轮（让LLM处理搜索结果）
+                        continue
+                    else:
+                        # 没有tool_calls，这就是最终回答
+                        response_text = msg.content or ""
+                        break
+                else:
+                    # 循环用完，取最后一次响应
+                    response_text = msg.content or "[Error: exceeded max search rounds]"
+            else:
+                # ===== 普通模式（off/always） =====
+                kwargs = _build_api_kwargs(messages)
+                response = client.chat.completions.create(**kwargs)
+                choice = response.choices[0]
+                response_text = choice.message.content or ""
+                thinking_text = getattr(choice.message, "reasoning_content", None) or ""
 
         except Exception as e:
             response_text = f"[API Error] {str(e)}"
