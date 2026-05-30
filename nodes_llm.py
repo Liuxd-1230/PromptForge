@@ -143,7 +143,7 @@ class LLMChatNode:
                 "web_search_max_rounds": ("INT", {
                     "default": 5,
                     "min": 1,
-                    "max": 10,
+                    "max": 20,
                     "step": 1,
                     "tooltip": "ai_decides模式下最多搜索轮数（防止无限循环）"
                 }),
@@ -459,6 +459,41 @@ class StorySplitterNode:
                     "default": "",
                     "placeholder": "自定义系统提示词（留空使用内置默认）。用于控制LLM如何拆分场景和生成prompt，例如：强调特定画风、指定输出格式、加入质量标签等"
                 }),
+                "enable_thinking": (["disable", "enable"], {
+                    "default": "disable",
+                    "tooltip": "思考模式：enable=DeepSeek原生思考（更慢但更准确），disable=直接回答"
+                }),
+                "reasoning_effort": (["high", "max"], {
+                    "default": "high",
+                    "tooltip": "思考强度：high=深度思考（推荐），max=极致思考。思考模式关闭时无效"
+                }),
+                "web_search_mode": (["off", "always", "ai_decides"], {
+                    "default": "off",
+                    "tooltip": "联网搜索：off=关闭，always=搜索后注入结果，ai_decides=AI自主决定是否搜索"
+                }),
+                "web_search_max_results": ("INT", {
+                    "default": 5,
+                    "min": 1,
+                    "max": 10,
+                    "step": 1,
+                    "tooltip": "每次搜索返回的最大结果数"
+                }),
+                "web_search_max_rounds": ("INT", {
+                    "default": 5,
+                    "min": 1,
+                    "max": 20,
+                    "step": 1,
+                    "tooltip": "ai_decides模式下最多搜索轮数"
+                }),
+                "file_path": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "tooltip": "本地文件路径（支持txt/json/md等），导入剧情文本"
+                }),
+                "file_inject_mode": (["append_to_story", "replace_story"], {
+                    "default": "append_to_story",
+                    "tooltip": "文件内容与story_text的关系：append_to_story=追加到后面，replace_story=替换story_text"
+                }),
             }
         }
 
@@ -469,7 +504,9 @@ class StorySplitterNode:
 
     def split_story(self, api_config, model, story_text, split_mode="scene",
                     max_scenes=8, character_list=None, style_hint="",
-                    system_prompt=""):
+                    system_prompt="", enable_thinking="disable", reasoning_effort="high",
+                    web_search_mode="off", web_search_max_results=5, web_search_max_rounds=5,
+                    file_path="", file_inject_mode="append_to_story"):
 
         from openai import OpenAI
 
@@ -481,6 +518,24 @@ class StorySplitterNode:
 
         base_url = api_url if api_url.endswith("/v1") else f"{api_url}/v1"
         client = OpenAI(api_key=api_key, base_url=base_url)
+        # 读取文件内容
+        file_content = ""
+        if file_path and file_path.strip():
+            try:
+                fp = Path(file_path.strip())
+                if fp.exists() and fp.is_file():
+                    file_content = fp.read_text(encoding="utf-8")
+                else:
+                    file_content = f"[File not found: {file_path.strip()}]"
+            except Exception as e:
+                file_content = f"[File read error: {e}]"
+
+        # 合并文件内容和story_text
+        if file_content and file_content.strip():
+            if file_inject_mode == "replace_story":
+                story_text = file_content.strip()
+            else:
+                story_text = f"{story_text.strip()}\n\n{file_content.strip()}".strip()
 
         # 构建角色信息
         character_info = ""
@@ -556,18 +611,71 @@ Story text:
 
 Output ONLY the JSON array, no other text."""
 
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=4096,
-                temperature=0.7,
-                stream=False
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        # ai_decides模式：注入Tool Calling
+        if web_search_mode == "ai_decides":
+            messages[0]["content"] += (
+                "\n\n## Web Search Tool\n"
+                "You have access to a web search tool. When you need current information "
+                "or facts you're unsure about, use the tool to search.\n"
+                "Call `web_search` with a query. You can search multiple times.\n"
+                "When you have enough information, provide your final JSON output directly."
             )
-            
+
+        def _build_kwargs(msgs):
+            kw = dict(model=model, messages=msgs, max_tokens=4096, stream=False)
+            eb = {}
+            if enable_thinking == "enable":
+                eb["thinking"] = {"type": "enabled"}
+                kw["reasoning_effort"] = reasoning_effort
+            else:
+                eb["thinking"] = {"type": "disabled"}
+            if eb:
+                kw["extra_body"] = eb
+            if web_search_mode == "ai_decides":
+                kw["tools"] = [{"type": "function", "function": {
+                    "name": "web_search",
+                    "description": "Search the web for information.",
+                    "parameters": {"type": "object", "properties": {
+                        "query": {"type": "string", "description": "Search query"}
+                    }, "required": ["query"]}
+                }}]
+            return kw
+
+        try:
+            if web_search_mode == "ai_decides":
+                result_text = ""
+                for _ in range(web_search_max_rounds):
+                    response = client.chat.completions.create(**_build_kwargs(messages))
+                    msg = response.choices[0].message
+                    if msg.tool_calls:
+                        messages.append({"role": "assistant", "content": msg.content or "",
+                            "tool_calls": [{"id": tc.id, "type": "function",
+                                "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                                for tc in msg.tool_calls]})
+                        for tc in msg.tool_calls:
+                            try:
+                                q = json.loads(tc.function.arguments).get("query", "")
+                            except:
+                                q = story_text[:200]
+                            messages.append({"role": "tool", "tool_call_id": tc.id,
+                                "content": self._bing_search(q, web_search_max_results)})
+                        continue
+                    result_text = msg.content or ""
+                    break
+                else:
+                    result_text = msg.content or "[Error: exceeded max search rounds]"
+            else:
+                # always模式：先搜索注入
+                if web_search_mode == "always" and story_text.strip():
+                    search_result = self._bing_search(story_text[:200], web_search_max_results)
+                    messages[-1]["content"] = f"--- Web Search Results ---\n{search_result}\n--- End ---\n\n{user_prompt}"
+                response = client.chat.completions.create(**_build_kwargs(messages))
+                result_text = response.choices[0].message.content or ""
             result_text = response.choices[0].message.content or ""
             logger.info(f"[Story Splitter] LLM raw response ({len(result_text)} chars):\n{result_text[:2000]}")
             
