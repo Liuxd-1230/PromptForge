@@ -29,7 +29,7 @@ class LLMChatNode:
     def _bing_search(query: str, max_results: int = 5) -> str:
         """直接抓取Bing搜索结果，解析HTML提取标题/链接/摘要"""
         try:
-            url = f"https://www.bing.com/search?q={urllib.parse.quote(query)}&count={max_results}"
+            url = f"https://cn.bing.com/search?q={urllib.parse.quote(query)}&count={max_results}"
             req = urllib.request.Request(url, headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
                 "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
@@ -45,6 +45,9 @@ class LLMChatNode:
             results = []
             # 匹配 Bing 搜索结果块：<li class="b_algo"> ... </li>
             blocks = re.findall(r'<li class="b_algo">(.*?)</li>', page, re.DOTALL)
+            if not blocks:
+                # 兼容另一种格式：data-id 属性
+                blocks = re.findall(r'<li class="b_algo"[^>]*>(.*?)</li>', page, re.DOTALL)
             for block in blocks[:max_results]:
                 # 提取标题和链接
                 link_match = re.search(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', block, re.DOTALL)
