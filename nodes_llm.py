@@ -8,6 +8,9 @@ import os
 import re
 from pathlib import Path
 from typing import List, Dict
+import urllib.parse
+import urllib.request
+import html as html_lib
 
 logger = logging.getLogger("PromptForge")
 
@@ -19,7 +22,54 @@ class LLMChatNode:
     - 支持人物外貌锚点
     - 改进的历史记录管理（确保多轮对话生效）
     - 思考模式开关
+    - 联网搜索（Bing）
     """
+
+    @staticmethod
+    def _bing_search(query: str, max_results: int = 5) -> str:
+        """直接抓取Bing搜索结果，解析HTML提取标题/链接/摘要"""
+        try:
+            url = f"https://www.bing.com/search?q={urllib.parse.quote(query)}&count={max_results}"
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                raw = resp.read()
+                # 尝试 utf-8，失败则 gbk
+                try:
+                    page = raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    page = raw.decode("gbk", errors="replace")
+
+            results = []
+            # 匹配 Bing 搜索结果块：<li class="b_algo"> ... </li>
+            blocks = re.findall(r'<li class="b_algo">(.*?)</li>', page, re.DOTALL)
+            for block in blocks[:max_results]:
+                # 提取标题和链接
+                link_match = re.search(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', block, re.DOTALL)
+                if not link_match:
+                    continue
+                href = link_match.group(1)
+                title = re.sub(r'<[^>]+>', '', link_match.group(2)).strip()
+                title = html_lib.unescape(title)
+
+                # 提取摘要
+                snippet = ""
+                # Bing 摘要在 <p> 或 <div class="b_caption"><p>
+                snippet_match = re.search(r'<p[^>]*>(.*?)</p>', block, re.DOTALL)
+                if snippet_match:
+                    snippet = re.sub(r'<[^>]+>', '', snippet_match.group(1)).strip()
+                    snippet = html_lib.unescape(snippet)
+
+                if title and href:
+                    results.append(f"[{title}]({href})\n{snippet}" if snippet else f"[{title}]({href})")
+
+            if results:
+                return "\n\n".join(results)
+            return "[No search results found]"
+        except Exception as e:
+            return f"[Search error: {e}]"
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -72,6 +122,21 @@ class LLMChatNode:
                     "default": "disable",
                     "tooltip": "思考模式：enable=DeepSeek原生思考（更慢但更准确），disable=直接回答"
                 }),
+                "reasoning_effort": (["high", "max"], {
+                    "default": "high",
+                    "tooltip": "思考强度：high=深度思考（推荐），max=极致思考（更慢但更全面）。思考模式关闭时无效"
+                }),
+                "enable_web_search": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "联网搜索：开启后自动用Bing搜索用户问题，将结果注入prompt（需要能访问bing.com）"
+                }),
+                "web_search_max_results": ("INT", {
+                    "default": 5,
+                    "min": 1,
+                    "max": 10,
+                    "step": 1,
+                    "tooltip": "搜索返回的最大结果数"
+                }),
 
                 "file_path": ("STRING", {
                     "default": "",
@@ -100,6 +165,8 @@ class LLMChatNode:
              character_list=None, character_prompt_mode="prepend_to_user",
              chat_history=None, history_mode="sliding_window", max_history_turns=10,
              enable_thinking="disable",
+             reasoning_effort="high",
+             enable_web_search=False, web_search_max_results=5,
              file_path="", file_inject_mode="append_to_system",
              prompt_file_content=""):
 
@@ -192,6 +259,12 @@ class LLMChatNode:
 
         # 3. 构建用户提示词
         final_user_prompt = user_prompt
+
+        # 联网搜索：抓取Bing结果注入到用户提示词前面
+        if enable_web_search and user_prompt.strip():
+            search_results = self._bing_search(user_prompt.strip(), web_search_max_results)
+            final_user_prompt = f"--- Web Search Results ---\n{search_results}\n--- End Search Results ---\n\nUser request: {user_prompt}"
+
         # 文件内容追加到用户输入后面
         if extra_content and file_inject_mode == "append_to_user":
             final_user_prompt = f"{user_prompt}\n\n--- Reference Content ---\n{extra_content}\n--- End Reference ---"
@@ -222,6 +295,10 @@ class LLMChatNode:
                 max_tokens=max_tokens,
                 stream=False,
             )
+
+            # reasoning_effort 仅在思考模式开启时传递
+            if enable_thinking == "enable":
+                kwargs["reasoning_effort"] = reasoning_effort
 
             if extra_body:
                 kwargs["extra_body"] = extra_body
