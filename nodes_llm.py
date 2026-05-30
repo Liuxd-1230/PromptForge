@@ -48,13 +48,7 @@ class LLMChatNode:
                     "max": 32768,
                     "step": 1
                 }),
-                "temperature": ("FLOAT", {
-                    "default": 0.7,
-                    "min": 0,
-                    "max": 2,
-                    "step": 0.05,
-                    "tooltip": "温度：0=确定性输出，2=最随机"
-                }),
+
             },
             "optional": {
                 "character_list": ("CHARACTER_LIST",),
@@ -78,17 +72,7 @@ class LLMChatNode:
                     "default": "disable",
                     "tooltip": "思考模式：enable=DeepSeek原生思考（更慢但更准确），disable=直接回答"
                 }),
-                "reasoning_effort": (["high", "max"], {
-                    "default": "high",
-                    "tooltip": "思考强度：high=深度思考（推荐），max=极致思考（更慢但更全面）。思考模式关闭时无效"
-                }),
-                "enable_search": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "联网搜索：开启后模型会搜索互联网获取最新信息（仅DeepSeek V4支持）"
-                }),
-                "top_p": ("FLOAT", {"default": 1.0, "min": 0, "max": 1, "step": 0.05}),
-                "presence_penalty": ("FLOAT", {"default": 0, "min": -2, "max": 2, "step": 0.1}),
-                "frequency_penalty": ("FLOAT", {"default": 0, "min": -2, "max": 2, "step": 0.1}),
+
                 "file_path": ("STRING", {
                     "default": "",
                     "multiline": False,
@@ -112,12 +96,10 @@ class LLMChatNode:
     CATEGORY = "PromptForge/LLM"
 
     def chat(self, api_config, model, system_prompt, user_prompt,
-             max_tokens, temperature,
+             max_tokens,
              character_list=None, character_prompt_mode="prepend_to_user",
              chat_history=None, history_mode="sliding_window", max_history_turns=10,
-             enable_thinking="disable", reasoning_effort="high",
-             enable_search=False,
-             top_p=1.0, presence_penalty=0, frequency_penalty=0,
+             enable_thinking="disable",
              file_path="", file_inject_mode="append_to_system",
              prompt_file_content=""):
 
@@ -230,28 +212,16 @@ class LLMChatNode:
             # 思考模式：DeepSeek 原生 thinking API
             if enable_thinking == "enable":
                 extra_body["thinking"] = {"type": "enabled"}
+            else:
+                # 显式关闭思考模式，防止模型仍然思考
+                extra_body["thinking"] = {"type": "disabled"}
 
-            # 联网搜索
-            if enable_search:
-                extra_body["enable_search"] = True
-
-            # 思考模式下 temperature/top_p/presence_penalty/frequency_penalty 不生效
             kwargs = dict(
                 model=model,
                 messages=messages,
                 max_tokens=max_tokens,
                 stream=False,
             )
-            if enable_thinking != "enable":
-                # 非思考模式才传这些参数
-                kwargs["temperature"] = temperature
-                kwargs["top_p"] = top_p
-                kwargs["presence_penalty"] = presence_penalty
-                kwargs["frequency_penalty"] = frequency_penalty
-                kwargs["reasoning_effort"] = reasoning_effort
-            else:
-                # 思考模式：reasoning_effort 作为顶级参数
-                kwargs["reasoning_effort"] = reasoning_effort
 
             if extra_body:
                 kwargs["extra_body"] = extra_body
